@@ -461,3 +461,121 @@ The container is designed to deploy to AWS App Runner, Render, or any container 
 - Portfolio visualization: heatmap renders with correct colors, P&L chart has data points
 - AI chat (mocked): send a message, receive a response, trade execution appears inline
 - SSE resilience: disconnect and verify reconnection
+
+---
+
+## 13. Clarifications & Implementation Notes
+
+This section captures gaps and ambiguities identified during review that would trip up agents building the remaining components.
+
+### App Entry Point & Lifespan
+
+The FastAPI application lives at `backend/app/main.py`. Use FastAPI's `lifespan` context manager (not the deprecated `@app.on_event`) for startup and shutdown:
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: init DB, seed data, start market data source
+    init_db()
+    tickers = get_watchlist_tickers()
+    cache = PriceCache()
+    source = create_market_data_source(cache)
+    await source.start(tickers)
+    app.state.price_cache = cache
+    app.state.market_source = source
+    yield
+    # Shutdown
+    await source.stop()
+
+app = FastAPI(lifespan=lifespan)
+```
+
+Routers that need the cache or source read them from `request.app.state`.
+
+### Watchlist ↔ Market Data Coupling
+
+When the watchlist API adds or removes a ticker, it must also update the running market data source so prices start/stop flowing. The API handlers must call:
+
+```python
+await request.app.state.market_source.add_ticker(ticker)    # on POST /api/watchlist
+await request.app.state.market_source.remove_ticker(ticker)  # on DELETE /api/watchlist/{ticker}
+```
+
+This coupling is not obvious from the architecture diagram but is essential for live prices to appear for newly added tickers.
+
+### `backend/app/` is the Python Package Root
+
+All backend modules live inside `backend/app/`. The `backend/db/` path shown in the §4 directory tree refers to `backend/app/db/` in practice. New modules should follow the same pattern:
+
+```
+backend/app/
+├── market/        # complete ✓
+├── db/            # schema, init, seed
+├── routes/        # portfolio, watchlist, chat, health
+└── main.py        # FastAPI app + lifespan
+```
+
+### Dependencies to Add Before Building Remaining Components
+
+The current `pyproject.toml` is missing several packages needed for the next phases:
+
+```bash
+uv add litellm pydantic python-dotenv aiosqlite
+```
+
+- `litellm` — LLM calls via OpenRouter/Cerebras (see cerebras skill for usage pattern)
+- `pydantic` — structured output models (FastAPI already pulls it in transitively, but declare it explicitly)
+- `python-dotenv` — load `.env` in development; call `load_dotenv()` at the top of `main.py`
+- `aiosqlite` — async SQLite access (optional; `sqlite3` from stdlib works if all DB calls are wrapped in `asyncio.to_thread`)
+
+### LiteLLM Usage Pattern
+
+From the cerebras skill — the correct imports and call pattern for structured output:
+
+```python
+from litellm import completion
+MODEL = "openrouter/openai/gpt-oss-120b"
+EXTRA_BODY = {"provider": {"order": ["cerebras"]}}
+
+response = completion(
+    model=MODEL,
+    messages=messages,
+    response_format=MyChatResponse,  # Pydantic BaseModel subclass
+    reasoning_effort="low",
+    extra_body=EXTRA_BODY,
+)
+result = MyChatResponse.model_validate_json(response.choices[0].message.content)
+```
+
+### Watchlist Changes — Valid Action Values
+
+The `watchlist_changes` array in the structured output supports two action values:
+
+```json
+{"ticker": "PYPL", "action": "add"}
+{"ticker": "NFLX", "action": "remove"}
+```
+
+### Portfolio Valuation Formula
+
+`GET /api/portfolio` must compute `total_value` as:
+
+```
+total_value = cash_balance + Σ(position.quantity × current_price)
+```
+
+Current prices come from `PriceCache.get_price(ticker)`. If a ticker has no price in the cache yet (race condition on startup), fall back to `position.avg_cost` for that position's valuation.
+
+### Database Path Configuration
+
+The backend should read the SQLite file path from an environment variable, defaulting sensibly for both container and local dev:
+
+```python
+import os
+DB_PATH = os.environ.get("DB_PATH", "./db/finally.db")
+```
+
+In the container, Docker mounts the volume at `/app/db/`, so set `DB_PATH=/app/db/finally.db` in the Dockerfile `ENV` or the run command.

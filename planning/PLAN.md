@@ -15,7 +15,7 @@ This is the capstone project for an agentic AI coding course. It is built entire
 The user runs a single Docker command (or a provided start script). A browser opens to `http://localhost:8000`. No login, no signup. They immediately see:
 
 - A watchlist of 10 default tickers with live-updating prices in a grid
-- $10,000 in virtual cash
+- $100,000 in virtual cash
 - A dark, data-rich trading terminal aesthetic
 - An AI chat panel ready to assist
 
@@ -83,6 +83,8 @@ The user runs a single Docker command (or a provided start script). A browser op
 ---
 
 ## 4. Directory Structure
+
+> **Note:** This is the target structure for the completed project. Currently only `backend/app/market/` (the market data subsystem) has been built. All other directories and files listed below are to be created.
 
 ```
 finally/
@@ -176,7 +178,10 @@ Both the simulator and the Massive client implement the same abstract interface.
 - Endpoint: `GET /api/stream/prices`
 - Long-lived SSE connection; client uses native `EventSource` API
 - Server pushes price updates for all tickers known to the system at a regular cadence (~500ms) — in the single-user model this is equivalent to the user's watchlist
-- Each SSE event contains ticker, price, previous price, timestamp, and change direction
+- Each SSE event is a single JSON object keyed by ticker symbol — all tracked tickers are batched into one event per interval. Each ticker value contains: `ticker`, `price`, `previous_price`, `timestamp`, `change`, `change_percent`, `direction`. Example:
+  ```json
+  data: {"AAPL": {"ticker": "AAPL", "price": 190.50, "previous_price": 190.25, "timestamp": 1234567890.0, "change": 0.25, "change_percent": 0.1314, "direction": "up"}, "GOOGL": {...}}
+  ```
 - Client handles reconnection automatically (EventSource has built-in retry)
 
 ---
@@ -284,6 +289,8 @@ All tables include a `user_id` column defaulting to `"default"`. This is hardcod
 When writing code to make calls to LLMs, use cerebras-inference skill to use LiteLLM via OpenRouter to the `openrouter/openai/gpt-oss-120b` model with Cerebras as the inference provider. Structured Outputs should be used to interpret the results.
 
 There is an OPENROUTER_API_KEY in the .env file in the project root.
+
+> **Dependency note:** `liteLLM` is not yet in `backend/pyproject.toml`. Add it before implementing LLM integration: `uv add liteLLM`.
 
 ### How It Works
 

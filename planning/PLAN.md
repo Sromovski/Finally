@@ -15,7 +15,7 @@ This is the capstone project for an agentic AI coding course. It is built entire
 The user runs a single Docker command (or a provided start script). A browser opens to `http://localhost:8000`. No login, no signup. They immediately see:
 
 - A watchlist of 10 default tickers with live-updating prices in a grid
-- $100,000 in virtual cash
+- $10,000 in virtual cash
 - A dark, data-rich trading terminal aesthetic
 - An AI chat panel ready to assist
 
